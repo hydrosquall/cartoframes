@@ -686,6 +686,16 @@ class CartoContext(object):
 
         # Setup layers
         for idx, layer in enumerate(layers):
+            if not layer.is_basemap:
+                resp = self.sql_client.send('''
+                    SELECT {cols}
+                    FROM ({query}) AS _wrap
+                    LIMIT 0'''.format(cols=','.join(layer.style_cols_types),
+                                      query=layer.query)
+                )
+                print(resp)
+                for k, v in dict_items(resp['fields']):
+                    self.style_cols_types[k] = v['type']
             layer._setup(layers, idx)
 
         nb_layers = non_basemap_layers(layers)

@@ -7,7 +7,7 @@ import pandas as pd
 import webcolors
 
 from cartoframes.utils import cssify
-from cartoframes.styling import BinMethod, mint, get_scheme_cartocss
+from cartoframes.styling import BinMethod, mint, bold, get_scheme_cartocss
 
 # colors map data layers without color specified
 # from cartocolor vivid scheme
@@ -163,6 +163,9 @@ class QueryLayer(AbstractLayer):
               Defaults to 256.
             - duration (int, optional): Number of seconds in the animation.
               Defaults to 30.
+            - trails (int, optional): Number of trailing frames to show in
+              animation. Defaults to 2. Each trail is 1/2 as opqaue, and 20%
+              larger than the preceding frame.
 
             If `time` is a ``str``, then it must be a column name available in
             the query that is of type numeric or datetime.
@@ -204,7 +207,7 @@ class QueryLayer(AbstractLayer):
                  tooltip=None, legend=None):
 
         self.query = query
-        self.style_cols = set()
+        self.style_cols = list()
 
         # color, scheme = self._get_colorscheme()
         # time = self._get_timescheme()
@@ -216,15 +219,18 @@ class QueryLayer(AbstractLayer):
                 raise ValueError("color must include a 'column' value")
             scheme = color.get('scheme', mint(5))
             color = color['column']
-            self.style_cols.add(color)
+            self.style_cols.append(color)
         elif (color and
               color[0] != '#' and
               color not in webcolors.CSS3_NAMES_TO_HEX):
             # color specified that is not a web color or hex value so its
             #  assumed to be a column name
             color = color
-            self.style_cols.add(color)
-            scheme = mint(5)
+            self.style_cols.append(color)
+            if self.style_cols_types[color] == 'string':
+                scheme = bold(10)
+            else:
+                scheme = mint(5)
         else:
             # assume it's a color
             color = color
@@ -243,7 +249,7 @@ class QueryLayer(AbstractLayer):
                 raise ValueError('`time` should be a column name or '
                                  'dictionary of styling options.')
 
-            self.style_cols.add(time_column)
+            self.style_cols.append(time_column)
             time = {
                 'column': time_column,
                 'method': 'count',
@@ -274,7 +280,7 @@ class QueryLayer(AbstractLayer):
             size.update(old_size)
             # Since we're accessing min/max, convert range into a list
             size['range'] = list(size['range'])
-            self.style_cols.add(size['column'])
+            self.style_cols.append(size['column'])
 
         self.color = color
         self.scheme = scheme
@@ -283,15 +289,17 @@ class QueryLayer(AbstractLayer):
         self.tooltip = tooltip
         self.legend = legend
         self._validate_columns()
+        self.style_cols_types = dict(zip(self.style_cols,
+                                         [None] * len(self.style_cols)))
 
     def _validate_columns(self):
         """Validate the options in the styles
         """
         geom_cols = {'the_geom', 'the_geom_webmercator'}
-        if self.style_cols & geom_cols:
+        if set(self.style_cols) & geom_cols:
             raise ValueError('Style columns cannot be geometry '
                              'columns. `{col}` was chosen.'.format(
-                                 col=','.join(self.style_cols & geom_cols)))
+                                 col=','.join(set(self.style_cols) & geom_cols)))
 
     def _setup(self, layers, layer_idx):
         basemap = layers[0]
@@ -345,7 +353,7 @@ class QueryLayer(AbstractLayer):
 
         line_color = '#000' if basemap.source == 'dark' else '#FFF'
         if self.time:
-            return cssify({
+            css = cssify({
                 # Torque Point CSS
                 "#layer": {
                     'marker-width': size_style,
@@ -355,9 +363,32 @@ class QueryLayer(AbstractLayer):
                     'marker-line-width': '0',
                     'marker-line-color': line_color,
                     'marker-line-opacity': '1',
-                    'comp-op': 'source-over',
+                    'comp-op': 'color-burn',
                 }
             })
+            if 'trails' in self.time:
+                trail_defaults = {
+                    'n_frames': 2,
+                    'opacity_decay': 2,
+                    'width_growth': 0.2
+                }
+                if isinstance(self.time['trails'], int):
+                    self.time['trails'] = {'n_frames': self.time['trails']}
+                trail_defaults.update(self.time['trails'])
+                print(trail_defaults)
+
+                def trail_css(n, op_decay, width_growth):
+                    return {
+                        '#layer[frame-offset={}]'.format(n): {
+                            'marker-width': (1 + width_growth * n) * size_style,
+                            'marker-fill-opacity': 0.9 / op_decay**n
+                        }
+                    }
+                css += '\n'.join(cssify(trail_css(i + 1,
+                                                  trail_defaults['opacity_decay'],
+                                                  trail_defaults['width_growth']))
+                                 for i in range(trail_defaults['n_frames']))
+            return css
         else:
             return cssify({
                 # Point CSS
